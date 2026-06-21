@@ -1,0 +1,164 @@
+-- Основные показатели
+-- https://github.com/DobleAncho/Gramps/SQL/_main_KPI_Query
+-- нужен, чтобы замерять прогресс
+--
+-- ДАТА-ВРЕМЯ ------------------------------------------------------------------------------
+	SELECT 
+		"dt_add" AS indicator, 
+		datetime('now', 'localtime') AS value 
+--
+--
+-- ПОСЛЕДНЕЕ ОБНОВЛЕНИЕ ------------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"dt_upd" AS indicator,
+		max(t.dt_chg) AS dt_chg
+	FROM (
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM citation t
+		UNION
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM event t
+		UNION
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM family t
+		UNION
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM media t
+		UNION
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM note t
+		UNION
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM person t
+		UNION
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM place t
+		UNION
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM repository t
+		UNION
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM source t
+		UNION
+		SELECT 
+			"dt_upd" AS indicator, 
+			max(datetime(json_extract(t.json_data, '$.change'), 'unixepoch', 'localtime')) dt_chg
+		FROM tag t
+		) t
+	GROUP BY indicator
+--
+--
+-- ЛЮДИ ------------------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Человек в базе" AS indicator, 
+		COUNT(*) value 
+	FROM person p
+--
+--
+-- ПРЯМЫЕ ПРЕДКИ ---------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Прямых предков" AS indicator, 
+		COUNT(*) value 
+	FROM 
+		reference r
+		LEFT JOIN tag t
+			ON t.handle = r.ref_handle
+	WHERE
+		r.obj_class = "Person"
+		AND r.ref_class = "Tag"
+		AND t.name = "-> прямой предок МЖ"  -- <=============== ЗАХАРДКОЖЕНО =============================================================
+--
+--
+-- СОБЫТИЯ --------------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Событий" AS indicator, 
+		COUNT(*) value 
+	FROM event
+--
+--
+-- СВЯЗИ --------------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Связей" AS indicator, 
+		COUNT(*) value 
+	FROM reference
+--
+--
+-- ФОТОГРАФИИ --------------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Портретов" AS indicator, 
+		COUNT(*) value 
+	FROM media m
+	WHERE 
+		m.path LIKE 'Квадратные фото%'  -- <=============== ЗАХАРДКОЖЕНО =============================================================
+--
+--
+-- МЕСТА --------------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Мест" AS indicator, 
+		COUNT(*) value 
+	FROM place p
+--
+--
+-- ЦИТАТЫ --------------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Цитат" AS indicator, 
+		COUNT(*) value 
+	FROM citation c
+--
+--
+-- ЗАМЕТКИ --------------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Заметок" AS indicator, 
+		COUNT(*) value 
+	FROM note n
+	WHERE 
+		json_extract(n.json_data, '$.type.value') != 25 -- не задачи
+--
+--
+-- ЗАМЕТКИ - ДЛИНА ------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Длина заметок, символов" AS indicator, 
+		SUM(LENGTH(JSON_EXTRACT(n.json_data, '$.text.string'))) value 
+	FROM note n
+	WHERE 
+		json_extract(n.json_data, '$.type.value') != 25 -- не задачи
+--
+--
+-- ЗАДАЧИ --------------------------------------------------------------------------------
+UNION ALL
+	SELECT 
+		"Задач" AS indicator, 
+--		sum(LENGTH(json_extract(n.json_data, '$.text.string')))	note_sum_text_len,
+		COUNT(*) value 
+	FROM note n
+	WHERE 
+		json_extract(n.json_data, '$.type.value') = 25 -- задачи
+;
