@@ -1,0 +1,273 @@
+-- Основной запрос, где все люди из БД
+-- https://github.com/DobleAncho/Gramps/SQL/_main_KPI_Query
+-- Выгрузить всех прямых предков одним списком, со всеми нужными атрибутами
+-- 
+-- =============================================================================================================
+SELECT
+	-- id
+		p.gramps_id,	
+	-- ФИО
+		p.given_name,
+		json_extract(p.json_data, '$.primary_name.suffix') AS patronymic,
+	    p.surname,
+	    (CASE WHEN ng.grouping IS NULL THEN p.surname ELSE ng.grouping END) AS surname_group,
+    -- количество имён (кроме основного)
+	    json_array_length(p.json_data, '$.alternate_names') AS n_additional_names,
+	-- пол  
+ 		p.gender,
+    -- четыре главные даты
+	    birth.date AS birth_date,
+		birth.place AS birth_place,
+		death.date AS death_date,
+		death.place AS death_place,
+	-- количество событий (кроме брака)
+	    json_array_length(p.json_data, '$.event_ref_list') AS n_events,
+	-- количество браков
+	    json_array_length(p.json_data, '$.family_list') AS n_marriages,
+	-- имя супруга/супруги (первого перечисленного брака)
+		sps.given_name || ' ' || 
+		json_extract(sps.json_data, '$.primary_name.suffix') || ' ' || 
+		sps.surname 
+		AS spouse,
+	-- дата брака (первого перечисленного)
+		e_mar_cur.event_date AS marriage_date, 
+	-- место брака (первого перечисленного)
+		e_mar_cur.event_place AS marriage_place, 
+	-- количество детей
+		json_array_length(f_cur.json_data, '$.child_ref_list') AS n_children,
+	-- количество родителей
+		(CASE WHEN f_par.father_handle IS NOT NULL THEN 1 ELSE 0 END +
+		 CASE WHEN f_par.mother_handle IS NOT NULL THEN 1 ELSE 0 END) 
+		 AS n_parents,
+	-- имя отца
+		p_father.given_name || ' ' || 
+		json_extract(p_father.json_data, '$.primary_name.suffix') || ' ' || 
+		p_father.surname 
+		AS father,
+	-- имя матери
+		p_mother.given_name || ' ' || 
+		json_extract(p_mother.json_data, '$.primary_name.suffix') || ' ' || 
+		p_mother.surname 
+		AS mother,
+	-- количество братьев и сестёр (вместе)
+		json_array_length(f_par.json_data, '$.child_ref_list') - 1 AS n_siblings,
+	-- количество братьев
+		f_par_sbl.brothers - p.gender n_brothers,
+	-- количество сестёр
+		f_par_sbl.sisters - (CASE WHEN p.gender = 0 THEN 1 ELSE 0 END) n_sisters,
+    -- количество цитат (документов, где упоминается - переписи, исповедные ведомости и т.п.)
+	    json_array_length(p.json_data, '$.citation_list') AS n_documents,
+	-- количество заметок (не задач)
+		n_notes.n_notes,
+	-- суммарная длина заметок (не задач)
+		n_notes.note_sum_text_len,
+	-- дата изменения последней заметки (не задачи, MSK)
+		n_notes.note_last_dt_chg,
+	-- количество задач
+		n_tasks.n_notes n_tasks,
+	-- суммарная длина задач (заметок с задачами)
+		n_tasks.note_sum_text_len task_sum_text_len,
+	-- дата изменения последней задачи (MSK)
+		n_tasks.note_last_dt_chg task_last_dt_chg,
+	-- количство меток
+		json_array_length(p.json_data, '$.tag_list') AS n_tags,
+	-- список меток
+    	t_tags.tags AS tags,
+	-- количество ссылок в интернет
+	    json_array_length(p.json_data, '$.urls') AS n_internet_links,
+	-- есть портрет
+	    (CASE WHEN json_array_length(p.json_data, '$.media_list') > 0 THEN 1 ELSE 0 END) AS has_portrait,
+	-- последнее изменение персональной карточки
+		datetime(json_extract(p.json_data, '$.change'), 'unixepoch', 'localtime') dt_chg
+FROM person p
+	-- добавляю данные о рождении
+		LEFT JOIN 
+			(
+				SELECT 
+					p.handle,
+					p.gramps_id,
+					json_extract(e.json_data, '$.date.text') date,
+					json_extract(pl.json_data, '$.name.value') place
+				FROM person p
+					LEFT JOIN reference r 
+						ON r.obj_handle = p.handle
+						AND r.ref_class = "Event"
+					INNER JOIN event e
+						ON e.handle = r.ref_handle 
+						AND json_extract(e.json_data, '$.type.value') = 12  -- рождение
+					LEFT JOIN place pl
+						ON pl.handle = json_extract(e.json_data, '$.place')
+			) birth
+				ON birth.handle = p.handle
+	-- добавляю данные о смерти
+		LEFT JOIN 
+			(
+				SELECT 
+					p.handle,
+					p.gramps_id,
+					json_extract(e.json_data, '$.date.text') date,
+					json_extract(pl.json_data, '$.name.value') place
+				FROM person p
+					LEFT JOIN reference r 
+						ON r.obj_handle = p.handle
+						AND r.ref_class = "Event"
+					INNER JOIN event e
+						ON e.handle = r.ref_handle 
+						AND json_extract(e.json_data, '$.type.value') = 13  -- смерть
+					LEFT JOIN place pl
+						ON pl.handle = json_extract(e.json_data, '$.place')
+			) death
+				ON death.handle = p.handle
+	-- добавляю первую семью (брак) текущего человека
+		LEFT JOIN family f_cur
+			ON f_cur.handle = json_extract(p.json_data, '$.family_list[0]') 
+	-- добавляю супруга из первого брака
+		LEFT JOIN person AS sps
+			ON sps.handle = 
+				(CASE 
+			    WHEN p.gender = 0 THEN f_cur.father_handle
+			    WHEN p.gender = 1 THEN f_cur.mother_handle
+			    END)
+	-- добавляю событие первого брака (первого занесённого)
+		LEFT JOIN
+			(
+				SELECT 
+					r.obj_handle family_handle,
+					e.handle event_handle,
+					e.gramps_id event_gramps_id,
+					json_extract(e.json_data, '$.date.text') AS event_date,
+					json_extract(pl.json_data, '$.name.value') AS event_place,
+					datetime(e.change, 'unixepoch', 'localtime') AS event_dt_chg
+				FROM reference r
+					INNER JOIN event e
+						ON e.handle = r.ref_handle 
+						AND json_extract(e.json_data, '$.type.value') = 1 -- только браки
+					LEFT JOIN place pl
+						ON pl.handle = json_extract(e.json_data, '$.place')
+				WHERE 
+					r.obj_class = "Family"
+					AND r.ref_class = "Event"
+				GROUP BY
+					family_handle
+			) e_mar_cur
+				ON e_mar_cur.family_handle = f_cur.handle
+	-- добавляю семью родителей текущего человека		
+		LEFT JOIN family f_par
+			ON f_par.handle = json_extract(p.json_data, '$.parent_family_list[0]')
+	-- добавляю отца
+		LEFT JOIN person p_father
+			ON p_father.handle = f_par.father_handle
+	-- добавляю мать
+		LEFT JOIN person p_mother
+			ON p_mother.handle = f_par.mother_handle
+	-- добавляю братьев и сестёр
+		LEFT JOIN 
+				(
+					SELECT 
+						f.handle,	
+						f.gramps_id,
+						SUM(p.gender) brothers,
+						COUNT(p.gender) - SUM(p.gender) sisters
+					FROM 
+						-- таблица связей между объектами
+							reference r
+						-- добавляю семьи
+							INNER JOIN family f
+								ON r.obj_handle = f.handle
+						-- добавлю людей
+							LEFT JOIN person p 
+								ON p.handle = r.ref_handle 
+					WHERE 
+						-- оставляю только нужные пары событий
+						r.obj_class = "Family"
+						AND r.ref_class = "Person"
+						-- исключаю родителей
+						AND (f.father_handle IS NULL OR r.ref_handle != f.father_handle) 
+						AND (f.mother_handle IS NULL OR r.ref_handle != f.mother_handle)  
+					GROUP BY
+						f.handle
+				) f_par_sbl
+			ON f_par_sbl.handle = f_par.handle
+	-- добавляю заметки (не задачи)
+		LEFT JOIN 
+				(	
+					SELECT 
+						r.obj_handle person_handle,
+						count(*) n_notes,
+						sum(LENGTH(json_extract(n.json_data, '$.text.string')))	note_sum_text_len,
+						max(datetime(json_extract(n.json_data, '$.change'), 'unixepoch', 'localtime')) note_last_dt_chg
+					FROM 
+						reference r
+						INNER JOIN note n
+							ON n.handle = r.ref_handle
+							AND json_extract(n.json_data, '$.type.value') != 25 -- не задачи
+					WHERE
+						r.obj_class = "Person"
+						AND r.ref_class = "Note"
+					GROUP BY
+						person_handle
+				) n_notes
+			ON n_notes.person_handle = p.handle
+	-- добавляю заметки (задачи)
+		LEFT JOIN 
+				(	
+					SELECT 
+						r.obj_handle person_handle,
+						count(*) n_notes,
+						sum(LENGTH(json_extract(n.json_data, '$.text.string')))	note_sum_text_len,
+						max(datetime(json_extract(n.json_data, '$.change'), 'unixepoch', 'localtime')) note_last_dt_chg
+					FROM 
+						reference r
+						INNER JOIN note n
+							ON n.handle = r.ref_handle
+							AND json_extract(n.json_data, '$.type.value') = 25 -- задачи
+					WHERE
+						r.obj_class = "Person"
+						AND r.ref_class = "Note"
+					GROUP BY
+						person_handle
+				) n_tasks
+			ON n_tasks.person_handle = p.handle		
+	-- добавляю метки
+		LEFT JOIN 
+				(	
+					SELECT 
+						r.obj_handle person_handle,
+						GROUP_CONCAT(t.name, ', ' ORDER BY t.priority ASC) AS tags
+					FROM 
+						reference r
+						LEFT JOIN tag t
+							ON t.handle = r.ref_handle
+					WHERE
+						r.obj_class = "Person"
+						AND r.ref_class = "Tag"
+					GROUP BY
+						person_handle
+				) t_tags
+			ON t_tags.person_handle = p.handle	
+	-- отбираю людей по конкретной метке
+		INNER JOIN 
+				(	
+					SELECT 
+						r.obj_handle person_handle,
+						t.handle tag_handle,
+						t.priority tag_priority,
+						t.name tag_name,
+						t.color tag_color,
+						datetime(t.change, 'unixepoch', 'localtime') AS tag_dt_chg
+					FROM 
+						reference r
+						LEFT JOIN tag t
+							ON t.handle = r.ref_handle
+					WHERE
+						r.obj_class = "Person"
+						AND r.ref_class = "Tag"
+						AND t.name = "-> прямой предок МЖ" -- <======= ЗАХАРДКОЖЕНО ======================================================
+				) t_select_by_tag
+			ON t_select_by_tag.person_handle = p.handle	
+	-- добавляю группу фамилий (чтобы было проще с падежами)
+		LEFT JOIN name_group ng
+			ON ng.name = p.surname
+ORDER BY
+	p.gramps_id ASC
+;
